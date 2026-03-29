@@ -1,0 +1,31 @@
+services:
+  cohere-transcribe:
+    image: cohere-transcribe-server:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cohere-transcribe-server
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - bridge-network
+    volumes:
+      - /opt/cohere-transcribe/data:/root/.cache/huggingface
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--trust-remote-code"]
+
+networks:
+  bridge-network:
+    external: true
