@@ -18,11 +18,13 @@ Usage:
 """
 
 import argparse
+import html
 import io
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 import librosa
@@ -32,6 +34,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -53,6 +56,7 @@ model_id: str = ""
 default_language: str = "en"
 model_backend: str = "native"
 IGNORED_WHISPER_PARAMS = ("temperature_inc", "prompt", "encode", "no_timestamps")
+INDEX_TEMPLATE_PATH = Path(__file__).with_name("templates") / "index.html"
 
 # Cohere Transcribe supported languages
 SUPPORTED_LANGUAGES = {
@@ -79,20 +83,33 @@ def load_model(model_name: str):
     logger.info(f"Loading model: {model_name} (backend=native)")
     start = time.time()
 
-    # Determine device
+    next_processor, next_model = load_model_artifacts(model_name)
+
     if torch.cuda.is_available():
-        next_device = torch.device("cuda:0")
-        logger.info(f"Using CUDA device: {torch.cuda.get_device_name(0)}")
+        gpu_count = torch.cuda.device_count()
+        primary_gpu_name = torch.cuda.get_device_name(0)
+        logger.info(
+            "CUDA is available (%s visible GPU%s). Using primary device cuda:0 (%s).",
+            gpu_count,
+            "" if gpu_count == 1 else "s",
+            primary_gpu_name,
+        )
+        try:
+            next_device = torch.device("cuda:0")
+            next_model = next_model.to(next_device)
+        except (RuntimeError, torch.OutOfMemoryError) as error:
+            logger.warning(
+                "Falling back to CPU because loading the model on cuda:0 failed: %s",
+                error,
+            )
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            next_device = torch.device("cpu")
+            next_model = next_model.to(next_device)
     else:
         next_device = torch.device("cpu")
         logger.info("Using CPU device")
 
-    from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
-
-    next_processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=False)
-    next_model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_name, trust_remote_code=False
-    ).to(next_device)
     next_model.eval()
 
     model_id = model_name
@@ -103,6 +120,29 @@ def load_model(model_name: str):
 
     elapsed = time.time() - start
     logger.info(f"Model loaded in {elapsed:.1f}s using backend={model_backend}")
+
+
+def load_model_artifacts(model_name: str):
+    """Load processor and model, preferring the local Hugging Face cache first."""
+    local_only_kwargs = {"trust_remote_code": False, "local_files_only": True}
+    remote_allowed_kwargs = {"trust_remote_code": False}
+
+    try:
+        logger.info("Trying to load model artifacts from local cache first")
+        processor = AutoProcessor.from_pretrained(model_name, **local_only_kwargs)
+        model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name, **local_only_kwargs)
+        logger.info("Loaded model artifacts from local cache")
+        return processor, model
+    except Exception as local_error:
+        logger.info(
+            "Local cache load failed, retrying with network access: %s",
+            local_error,
+        )
+
+    processor = AutoProcessor.from_pretrained(model_name, **remote_allowed_kwargs)
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(model_name, **remote_allowed_kwargs)
+    logger.info("Loaded model artifacts with network access")
+    return processor, model
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +353,61 @@ def health_payload() -> dict:
     }
 
 
+def render_supported_language_badges() -> str:
+    """Render supported languages as badge markup for the homepage."""
+    return "".join(
+        f'<span class="badge">{html.escape(lang)}</span>'
+        for lang in sorted(SUPPORTED_LANGUAGES)
+    )
+
+
+def render_language_options() -> str:
+    """Render the language select options for the homepage form."""
+    options: list[str] = []
+    for lang in sorted(SUPPORTED_LANGUAGES):
+        selected = " selected" if lang == default_language else ""
+        options.append(
+            f'<option value="{html.escape(lang)}"{selected}>{html.escape(lang)}</option>'
+        )
+    return "".join(options)
+
+
+def render_compatibility_notes() -> str:
+    """Render compatibility notes shown on the homepage."""
+    notes = [
+        (
+            "<strong>Full request/response compatibility:</strong> basic whisper.cpp "
+            "multipart requests and JSON/text/subtitle response shapes"
+        ),
+        (
+            "<strong>Compatibility-only parameters:</strong> "
+            "<code>temperature_inc</code>, <code>prompt</code>, <code>encode</code>, "
+            "<code>no_timestamps</code>"
+        ),
+        (
+            "<strong>Not supported:</strong> translation, auto language detection, "
+            "native per-segment timestamps"
+        ),
+    ]
+    return "".join(f"<li>{note}</li>" for note in notes)
+
+
+def render_index_page() -> str:
+    """Render the homepage HTML from the external template file."""
+    template = INDEX_TEMPLATE_PATH.read_text(encoding="utf-8")
+    replacements = {
+        "__MODEL_ID__": html.escape(model_id or "not loaded"),
+        "__DEVICE__": html.escape(str(device) if device is not None else "unknown"),
+        "__MODEL_BACKEND__": html.escape(model_backend),
+        "__SUPPORTED_LANGUAGE_BADGES__": render_supported_language_badges(),
+        "__LANGUAGE_OPTIONS__": render_language_options(),
+        "__COMPATIBILITY_NOTES__": render_compatibility_notes(),
+    }
+    for placeholder, value in replacements.items():
+        template = template.replace(placeholder, value)
+    return template
+
+
 def run_transcription_request(
     *,
     audio_data: np.ndarray,
@@ -421,219 +516,7 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    compatibility_notes = (
-        "<li><strong>Full request/response compatibility:</strong> basic whisper.cpp "
-        "multipart requests and JSON/text/subtitle response shapes</li>"
-        "<li><strong>Compatibility-only parameters:</strong> "
-        "<code>temperature_inc</code>, <code>prompt</code>, <code>encode</code>, "
-        "<code>no_timestamps</code></li>"
-        "<li><strong>Not supported:</strong> translation, auto language detection, "
-        "native per-segment timestamps</li>"
-    )
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cohere Transcribe Server</title>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{
-            font-family: 'Inter', -apple-system, system-ui, sans-serif;
-            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
-            color: #e0e0e0; min-height: 100vh; padding: 2rem;
-        }}
-        .container {{ max-width: 800px; margin: 0 auto; }}
-        h1 {{
-            font-size: 2.5rem; font-weight: 700;
-            background: linear-gradient(90deg, #7f5af0, #2cb67d);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            margin-bottom: 1rem;
-        }}
-        .card {{
-            background: rgba(255,255,255,0.05);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 12px; padding: 1.5rem; margin: 1rem 0;
-            backdrop-filter: blur(10px);
-        }}
-        .card h2 {{ color: #7f5af0; margin-bottom: 0.5rem; font-size: 1.2rem; }}
-        code {{
-            background: rgba(127,90,240,0.15); color: #2cb67d;
-            padding: 2px 6px; border-radius: 4px; font-size: 0.9rem;
-        }}
-        pre {{
-            background: rgba(0,0,0,0.4); border-radius: 8px;
-            padding: 1rem; overflow-x: auto; margin: 0.5rem 0;
-            border: 1px solid rgba(255,255,255,0.08);
-        }}
-        pre code {{ background: none; color: #a0e4b0; padding: 0; }}
-        .badge {{
-            display: inline-block; padding: 4px 12px;
-            background: rgba(127,90,240,0.2); border: 1px solid #7f5af0;
-            border-radius: 20px; font-size: 0.8rem; color: #7f5af0;
-            margin: 2px 4px;
-        }}
-        .transcribe-form {{
-            display: grid;
-            gap: 1rem;
-        }}
-        .form-row {{
-            display: grid;
-            gap: 0.5rem;
-        }}
-        label {{
-            font-weight: 600;
-            color: #fffffe;
-        }}
-        input[type="file"], select {{
-            width: 100%;
-            padding: 0.9rem 1rem;
-            background: rgba(0,0,0,0.25);
-            color: #fffffe;
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 10px;
-        }}
-        button {{
-            border: 0;
-            border-radius: 999px;
-            padding: 0.95rem 1.4rem;
-            background: linear-gradient(135deg, #7f5af0, #2cb67d);
-            color: #fffffe;
-            font-weight: 700;
-            cursor: pointer;
-        }}
-        button:disabled {{
-            opacity: 0.6;
-            cursor: wait;
-        }}
-        .hint {{
-            color: #94a1b2;
-            font-size: 0.92rem;
-        }}
-        .result {{
-            min-height: 96px;
-            white-space: pre-wrap;
-            line-height: 1.6;
-        }}
-        .status {{ color: #2cb67d; font-weight: 600; }}
-    </style>
-</head>
-<body>
-<div class="container">
-    <h1>🎙️ Cohere Transcribe Server</h1>
-    <p>whisper.cpp-compatible API powered by <strong>Cohere Transcribe</strong></p>
-
-    <div class="card">
-        <h2>📊 Status</h2>
-        <p>Model: <code>{model_id}</code></p>
-        <p>Device: <code>{device}</code></p>
-        <p>Backend: <code>{model_backend}</code></p>
-        <p>Status: <span class="status">● Running</span></p>
-    </div>
-
-    <div class="card">
-        <h2>🌐 Supported Languages</h2>
-        <div>
-            {"".join(f'<span class="badge">{l}</span>' for l in sorted(SUPPORTED_LANGUAGES))}
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>🔗 API Endpoints</h2>
-        <p><code>POST /inference</code> — whisper.cpp compatible</p>
-        <p><code>POST /v1/audio/transcriptions</code> — OpenAI compatible</p>
-        <p><code>POST /load</code> — hot-reload model</p>
-        <p><code>GET /health</code> — readiness and liveness check</p>
-    </div>
-
-    <div class="card">
-        <h2>🎧 Quick Transcription</h2>
-        <form id="transcribe-form" class="transcribe-form">
-            <div class="form-row">
-                <label for="audio-file">Audio File</label>
-                <input id="audio-file" name="file" type="file" accept="audio/*" required>
-            </div>
-            <div class="form-row">
-                <label for="language">Language</label>
-                <select id="language" name="language">
-                    {"".join(
-                        f'<option value="{lang}"{" selected" if lang == default_language else ""}>{lang}</option>'
-                        for lang in sorted(SUPPORTED_LANGUAGES)
-                    )}
-                </select>
-                <div class="hint">Language is a hint for the model. Clear audio may still transcribe correctly even if a different language is selected.</div>
-            </div>
-            <button id="submit-button" type="submit">Transcribe</button>
-        </form>
-        <div class="form-row" style="margin-top: 1rem;">
-            <label for="transcription-result">Result</label>
-            <pre id="transcription-result" class="result"><code>Choose an audio file and click Transcribe.</code></pre>
-        </div>
-    </div>
-
-    <div class="card">
-        <h2>⚠️ Compatibility Notes</h2>
-        <ul>{compatibility_notes}</ul>
-    </div>
-
-    <div class="card">
-        <h2>📋 Example (curl)</h2>
-        <pre><code>curl http://127.0.0.1:8080/inference \\
-  -H "Content-Type: multipart/form-data" \\
-  -F file="@audio.wav" \\
-  -F temperature="0.0" \\
-  -F response_format="json" \\
-  -F language="en"</code></pre>
-    </div>
-</div>
-<script>
-const form = document.getElementById("transcribe-form");
-const button = document.getElementById("submit-button");
-const result = document.getElementById("transcription-result");
-
-form.addEventListener("submit", async (event) => {{
-    event.preventDefault();
-
-    const fileInput = document.getElementById("audio-file");
-    const languageInput = document.getElementById("language");
-
-    if (!fileInput.files.length) {{
-        result.textContent = "Please choose an audio file first.";
-        return;
-    }}
-
-    const formData = new FormData();
-    formData.append("file", fileInput.files[0]);
-    formData.append("language", languageInput.value);
-    formData.append("response_format", "json");
-    formData.append("temperature", "0.0");
-
-    button.disabled = true;
-    button.textContent = "Transcribing...";
-    result.textContent = "Processing audio...";
-
-    try {{
-        const response = await fetch("/inference", {{
-            method: "POST",
-            body: formData,
-        }});
-        const payload = await response.json();
-
-        if (!response.ok) {{
-            throw new Error(payload.detail || "Transcription failed");
-        }}
-
-        result.textContent = payload.text || "";
-    }} catch (error) {{
-        result.textContent = `Error: ${{error.message}}`;
-    }} finally {{
-        button.disabled = false;
-        button.textContent = "Transcribe";
-    }}
-}});
-</script>
-</body>
-</html>"""
+    return render_index_page()
 
 
 @app.get("/health")
@@ -783,7 +666,7 @@ def main():
     # Print banner
     print(r"""
   ╔═══════════════════════════════════════════════════════╗
-  ║   🎙️  Cohere Transcribe Server                       ║
+  ║      Cohere Transcribe Server                        ║
   ║   whisper.cpp-compatible API                         ║
   ╚═══════════════════════════════════════════════════════╝
     """)

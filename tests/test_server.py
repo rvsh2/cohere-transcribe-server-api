@@ -350,6 +350,73 @@ class CohereTranscribeApiTests(unittest.TestCase):
             self.assertIs(server.processor, old_processor)
             self.assertIs(server.device, old_device)
 
+    def test_load_model_falls_back_to_cpu_when_cuda_load_fails(self):
+        class FakeModel:
+            def __init__(self):
+                self.moved_to = []
+                self.eval_called = False
+
+            def to(self, target_device):
+                self.moved_to.append(str(target_device))
+                if str(target_device) == "cuda:0":
+                    raise torch.OutOfMemoryError("CUDA out of memory")
+                return self
+
+            def eval(self):
+                self.eval_called = True
+
+        fake_model = FakeModel()
+        fake_processor = object()
+
+        with patch("transformers.AutoProcessor.from_pretrained", return_value=fake_processor), \
+             patch("transformers.AutoModelForSpeechSeq2Seq.from_pretrained", return_value=fake_model), \
+             patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.device_count", return_value=2), \
+             patch("torch.cuda.get_device_name", return_value="NVIDIA GeForce RTX 3090"), \
+             patch("torch.cuda.empty_cache") as empty_cache:
+            server.load_model("fallback-model")
+
+        self.assertEqual(fake_model.moved_to, ["cuda:0", "cpu"])
+        self.assertTrue(fake_model.eval_called)
+        self.assertIs(server.model, fake_model)
+        self.assertIs(server.processor, fake_processor)
+        self.assertEqual(str(server.device), "cpu")
+        empty_cache.assert_called_once()
+
+    def test_load_model_prefers_local_cache_before_network(self):
+        call_log = []
+        fake_model = SimpleNamespace(to=lambda device: fake_model, eval=lambda: None)
+        fake_processor = object()
+
+        def fake_processor_from_pretrained(model_name, **kwargs):
+            call_log.append(("processor", kwargs.copy()))
+            if kwargs.get("local_files_only"):
+                raise OSError("missing local cache")
+            return fake_processor
+
+        def fake_model_from_pretrained(model_name, **kwargs):
+            call_log.append(("model", kwargs.copy()))
+            if kwargs.get("local_files_only"):
+                raise OSError("missing local cache")
+            return fake_model
+
+        with patch("transformers.AutoProcessor.from_pretrained", side_effect=fake_processor_from_pretrained), \
+             patch("transformers.AutoModelForSpeechSeq2Seq.from_pretrained", side_effect=fake_model_from_pretrained), \
+             patch("torch.cuda.is_available", return_value=False):
+            server.load_model("offline-first-model")
+
+        self.assertEqual(
+            call_log,
+            [
+                ("processor", {"trust_remote_code": False, "local_files_only": True}),
+                ("processor", {"trust_remote_code": False}),
+                ("model", {"trust_remote_code": False}),
+            ],
+        )
+        self.assertIs(server.processor, fake_processor)
+        self.assertIs(server.model, fake_model)
+        self.assertEqual(str(server.device), "cpu")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+
 # ============================================================================
 # Test script for Cohere Transcribe Server
 # Compatible with whisper.cpp server API
@@ -17,13 +19,13 @@ echo ""
 
 # --- Test 1: Server info page ---
 echo "━━━ Test 1: GET / (server info) ━━━"
-curl -s "${SERVER}/" | head -5
+curl -fsS "${SERVER}/" | head -5
 echo ""
 echo ""
 
 # --- Test 2: /inference JSON (whisper.cpp format) ---
 echo "━━━ Test 2: POST /inference (json) ━━━"
-curl -s "${SERVER}/inference" \
+curl -fsS "${SERVER}/inference" \
   -H "Content-Type: multipart/form-data" \
   -F file="@${AUDIO_FILE}" \
   -F temperature="0.0" \
@@ -35,7 +37,7 @@ echo ""
 
 # --- Test 3: /inference text format ---
 echo "━━━ Test 3: POST /inference (text) ━━━"
-curl -s "${SERVER}/inference" \
+curl -fsS "${SERVER}/inference" \
   -F file="@${AUDIO_FILE}" \
   -F response_format="text" \
   -F language="en"
@@ -43,7 +45,7 @@ echo ""
 
 # --- Test 4: /inference verbose_json format ---
 echo "━━━ Test 4: POST /inference (verbose_json) ━━━"
-curl -s "${SERVER}/inference" \
+curl -fsS "${SERVER}/inference" \
   -F file="@${AUDIO_FILE}" \
   -F response_format="verbose_json" \
   -F language="en"
@@ -52,7 +54,7 @@ echo ""
 
 # --- Test 5: /inference SRT format ---
 echo "━━━ Test 5: POST /inference (srt) ━━━"
-curl -s "${SERVER}/inference" \
+curl -fsS "${SERVER}/inference" \
   -F file="@${AUDIO_FILE}" \
   -F response_format="srt" \
   -F language="en"
@@ -60,7 +62,7 @@ echo ""
 
 # --- Test 6: /inference VTT format ---
 echo "━━━ Test 6: POST /inference (vtt) ━━━"
-curl -s "${SERVER}/inference" \
+curl -fsS "${SERVER}/inference" \
   -F file="@${AUDIO_FILE}" \
   -F response_format="vtt" \
   -F language="en"
@@ -68,7 +70,7 @@ echo ""
 
 # --- Test 7: OpenAI compatible endpoint ---
 echo "━━━ Test 7: POST /v1/audio/transcriptions (OpenAI) ━━━"
-curl -s "${SERVER}/v1/audio/transcriptions" \
+curl -fsS "${SERVER}/v1/audio/transcriptions" \
   -F file="@${AUDIO_FILE}" \
   -F model="CohereLabs/cohere-transcribe-03-2026" \
   -F language="en"
@@ -77,7 +79,7 @@ echo ""
 
 # --- Test 8: Polish language ---
 echo "━━━ Test 8: POST /inference (Polish) ━━━"
-curl -s "${SERVER}/inference" \
+curl -fsS "${SERVER}/inference" \
   -F file="@${AUDIO_FILE}" \
   -F response_format="json" \
   -F language="pl"

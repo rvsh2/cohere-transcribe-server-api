@@ -23,6 +23,7 @@ ENV PATH="/app/.venv/bin:${PATH}"
 ENV VIRTUAL_ENV="/app/.venv"
 
 COPY server.py .
+COPY templates ./templates
 
 EXPOSE 8080
 
