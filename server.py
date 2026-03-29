@@ -22,6 +22,7 @@ import html
 import io
 import logging
 import os
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -57,6 +58,8 @@ default_language: str = "en"
 model_backend: str = "native"
 IGNORED_WHISPER_PARAMS = ("temperature_inc", "prompt", "encode", "no_timestamps")
 INDEX_TEMPLATE_PATH = Path(__file__).with_name("templates") / "index.html"
+SILENCE_RMS_THRESHOLD = 0.002
+SILENCE_PEAK_THRESHOLD = 0.01
 
 # Cohere Transcribe supported languages
 SUPPORTED_LANGUAGES = {
@@ -176,10 +179,43 @@ def read_audio_to_numpy(file_bytes: bytes, filename: str = "audio") -> tuple[np.
         audio_io = io.BytesIO(file_bytes)
         audio_data, sr = librosa.load(audio_io, sr=16000, mono=True)
         return audio_data, sr
-    except Exception as e:
+    except Exception as librosa_error:
+        pass
+
+    try:
+        # Final fallback through ffmpeg to cover browser-recorded WebM/Opus and other formats.
+        process = subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-i",
+                "pipe:0",
+                "-f",
+                "f32le",
+                "-acodec",
+                "pcm_f32le",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "pipe:1",
+            ],
+            input=file_bytes,
+            capture_output=True,
+            check=True,
+        )
+
+        audio_data = np.frombuffer(process.stdout, dtype=np.float32)
+        if audio_data.size == 0:
+            raise ValueError("ffmpeg produced empty audio output")
+        return audio_data, 16000
+    except Exception as ffmpeg_error:
         raise ValueError(
             f"Could not read audio file '{filename}'. "
-            f"Supported formats: WAV, MP3, FLAC, OGG. Error: {e}"
+            "Supported formats: WAV, MP3, FLAC, OGG, WebM and other ffmpeg-decodable "
+            f"audio. soundfile/librosa error: {librosa_error}. ffmpeg error: {ffmpeg_error}"
         )
 
 
@@ -417,12 +453,32 @@ def run_transcription_request(
 ) -> dict:
     """Resolve request defaults and execute a transcription."""
     lang = resolve_language(language)
+    duration = round(len(audio_data) / sr, 2) if sr else 0.0
+
+    if is_effectively_silent(audio_data):
+        logger.info("No speech detected above silence threshold; returning empty transcription")
+        return {
+            "text": "",
+            "language": lang,
+            "duration": duration,
+            "processing_time": 0.0,
+        }
 
     try:
         return transcribe_audio(audio_data, sr, lang, temperature)
     except Exception as e:
         logger.error(f"Transcription error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+
+
+def is_effectively_silent(audio_data: np.ndarray) -> bool:
+    """Return True when the decoded audio is effectively silence."""
+    if audio_data.size == 0:
+        return True
+
+    rms = float(np.sqrt(np.mean(np.square(audio_data, dtype=np.float32))))
+    peak = float(np.max(np.abs(audio_data)))
+    return rms < SILENCE_RMS_THRESHOLD and peak < SILENCE_PEAK_THRESHOLD
 
 
 # ---------------------------------------------------------------------------

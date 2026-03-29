@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import subprocess
 import sys
 import unittest
 import wave
@@ -282,6 +283,27 @@ class CohereTranscribeApiTests(unittest.TestCase):
         self.assertGreater(len(stereo_audio), 0)
         self.assertGreater(len(mono_audio), 0)
 
+    def test_audio_preprocessing_falls_back_to_ffmpeg_for_webm(self):
+        ffmpeg_audio = np.array([0.1, -0.2, 0.3], dtype=np.float32)
+
+        with patch.object(server.sf, "read", side_effect=RuntimeError("sf failed")), \
+             patch.object(server.librosa, "load", side_effect=RuntimeError("librosa failed")), \
+             patch.object(
+                 server.subprocess,
+                 "run",
+                 return_value=subprocess.CompletedProcess(
+                     args=["ffmpeg"],
+                     returncode=0,
+                     stdout=ffmpeg_audio.tobytes(),
+                     stderr=b"",
+                 ),
+             ) as ffmpeg_run:
+            audio_data, sr = server.read_audio_to_numpy(b"fake-webm", "recording.webm")
+
+        self.assertEqual(sr, 16000)
+        self.assertTrue(np.array_equal(audio_data, ffmpeg_audio))
+        ffmpeg_run.assert_called_once()
+
     def test_temperature_controls_generate_sampling(self):
         fake_inputs = {
             "audio_chunk_index": None,
@@ -324,6 +346,23 @@ class CohereTranscribeApiTests(unittest.TestCase):
         self.assertNotIn("temperature", greedy_call)
         self.assertTrue(sampling_call["do_sample"])
         self.assertEqual(sampling_call["temperature"], 0.7)
+
+    def test_silent_audio_returns_empty_transcription_without_model_call(self):
+        silent_audio = np.zeros(16000, dtype=np.float32)
+
+        with patch.object(server, "transcribe_audio") as transcribe_audio:
+            result = server.run_transcription_request(
+                audio_data=silent_audio,
+                sr=16000,
+                language="pl",
+                temperature=0.0,
+            )
+
+        self.assertEqual(result["text"], "")
+        self.assertEqual(result["language"], "pl")
+        self.assertEqual(result["duration"], 1.0)
+        self.assertEqual(result["processing_time"], 0.0)
+        transcribe_audio.assert_not_called()
 
     def test_cli_no_longer_exposes_trust_remote_code_flags(self):
         argv = ["server.py"]

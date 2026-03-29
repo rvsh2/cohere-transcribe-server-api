@@ -47,9 +47,23 @@
             display: grid;
             gap: 1rem;
         }
+        .input-grid {
+            display: grid;
+            gap: 1rem;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            align-items: start;
+        }
         .form-row {
             display: grid;
             gap: 0.5rem;
+        }
+        .input-panel {
+            display: grid;
+            gap: 0.75rem;
+            padding: 1rem;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
         }
         label {
             font-weight: 600;
@@ -72,6 +86,18 @@
             font-weight: 700;
             cursor: pointer;
         }
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+        .button-secondary {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.12);
+        }
+        .button-danger {
+            background: #a24c59;
+        }
         button:disabled {
             opacity: 0.6;
             cursor: wait;
@@ -79,6 +105,21 @@
         .hint {
             color: #94a1b2;
             font-size: 0.92rem;
+        }
+        .source-summary {
+            padding: 0.85rem 1rem;
+            border-radius: 10px;
+            background: rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: #c7d2de;
+        }
+        .recording-status {
+            font-size: 0.92rem;
+            color: #c7d2de;
+        }
+        .recording-live {
+            color: #ffb4be;
+            font-weight: 700;
         }
         .result {
             min-height: 96px;
@@ -118,15 +159,32 @@
     <div class="card">
         <h2>Quick Transcription</h2>
         <form id="transcribe-form" class="transcribe-form">
-            <div class="form-row">
-                <label for="audio-file">Audio File</label>
-                <input id="audio-file" name="file" type="file" accept="audio/*" required>
+            <div class="input-grid">
+                <div class="input-panel">
+                    <div class="form-row">
+                        <label for="audio-file">Upload Audio</label>
+                        <input id="audio-file" name="file" type="file" accept="audio/*">
+                        <div class="hint">Choose an existing audio file from your device.</div>
+                    </div>
+                </div>
+                <div class="input-panel">
+                    <div class="form-row">
+                        <label>Record Voice</label>
+                        <div class="button-row">
+                            <button id="record-button" class="button-secondary" type="button">Record Voice</button>
+                            <button id="clear-recording-button" class="button-secondary" type="button" disabled>Clear Recording</button>
+                        </div>
+                        <div id="recording-status" class="recording-status">No recording captured yet.</div>
+                        <div class="hint">Microphone recording usually works on localhost or over HTTPS. On plain HTTP in LAN mode, some browsers may block microphone access.</div>
+                    </div>
+                </div>
             </div>
             <div class="form-row">
                 <label for="language">Language</label>
                 <select id="language" name="language">__LANGUAGE_OPTIONS__</select>
                 <div class="hint">Language is a hint for the model. Clear audio may still transcribe correctly even if a different language is selected.</div>
             </div>
+            <div id="source-summary" class="source-summary">Active source: none selected.</div>
             <button id="submit-button" type="submit">Transcribe</button>
         </form>
         <div class="form-row" style="margin-top: 1rem;">
@@ -165,28 +223,178 @@
 </div>
 <script>
 const form = document.getElementById("transcribe-form");
-const button = document.getElementById("submit-button");
+const submitButton = document.getElementById("submit-button");
 const result = document.getElementById("transcription-result");
+const fileInput = document.getElementById("audio-file");
+const languageInput = document.getElementById("language");
+const recordButton = document.getElementById("record-button");
+const clearRecordingButton = document.getElementById("clear-recording-button");
+const recordingStatus = document.getElementById("recording-status");
+const sourceSummary = document.getElementById("source-summary");
+
+let mediaRecorder = null;
+let mediaStream = null;
+let recordedChunks = [];
+let recordedBlob = null;
+
+function detectRecordingMimeType() {
+    const mimeTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+    ];
+
+    if (typeof MediaRecorder === "undefined") {
+        return "";
+    }
+
+    return mimeTypes.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) || "";
+}
+
+function getSelectedAudio() {
+    if (recordedBlob) {
+        return {
+            file: new File([recordedBlob], "recording.webm", {
+                type: recordedBlob.type || "audio/webm",
+            }),
+            label: "microphone recording",
+        };
+    }
+
+    if (fileInput.files.length) {
+        return {
+            file: fileInput.files[0],
+            label: fileInput.files[0].name,
+        };
+    }
+
+    return null;
+}
+
+function updateSourceSummary() {
+    const selectedAudio = getSelectedAudio();
+
+    if (!selectedAudio) {
+        sourceSummary.textContent = "Active source: none selected.";
+        return;
+    }
+
+    sourceSummary.textContent = `Active source: ${selectedAudio.label}`;
+}
+
+function resetRecordingState(message) {
+    recordedChunks = [];
+    recordedBlob = null;
+    clearRecordingButton.disabled = true;
+    recordingStatus.textContent = message;
+    updateSourceSummary();
+}
+
+function stopStream() {
+    if (!mediaStream) {
+        return;
+    }
+
+    mediaStream.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+}
+
+function setBusyState(isBusy) {
+    submitButton.disabled = isBusy;
+    fileInput.disabled = isBusy;
+    languageInput.disabled = isBusy;
+    recordButton.disabled = isBusy;
+    clearRecordingButton.disabled = isBusy || !recordedBlob;
+}
+
+fileInput.addEventListener("change", () => {
+    if (fileInput.files.length) {
+        recordedBlob = null;
+        recordedChunks = [];
+        clearRecordingButton.disabled = true;
+        recordingStatus.textContent = "No recording captured yet.";
+    }
+
+    updateSourceSummary();
+});
+
+clearRecordingButton.addEventListener("click", () => {
+    fileInput.value = "";
+    resetRecordingState("No recording captured yet.");
+});
+
+recordButton.addEventListener("click", async () => {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+        recordButton.textContent = "Record Voice";
+        recordButton.classList.remove("button-danger");
+        recordingStatus.textContent = "Finishing recording...";
+        return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+        recordingStatus.textContent = "Microphone recording is not supported in this browser.";
+        return;
+    }
+
+    try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordedChunks = [];
+        fileInput.value = "";
+        updateSourceSummary();
+
+        const mimeType = detectRecordingMimeType();
+        mediaRecorder = mimeType
+            ? new MediaRecorder(mediaStream, { mimeType })
+            : new MediaRecorder(mediaStream);
+
+        mediaRecorder.addEventListener("dataavailable", (event) => {
+            if (event.data && event.data.size > 0) {
+                recordedChunks.push(event.data);
+            }
+        });
+
+        mediaRecorder.addEventListener("stop", () => {
+            const blobType = mimeType || "audio/webm";
+            recordedBlob = recordedChunks.length ? new Blob(recordedChunks, { type: blobType }) : null;
+            recordButton.textContent = "Record Voice";
+            recordButton.classList.remove("button-danger");
+            clearRecordingButton.disabled = !recordedBlob;
+            recordingStatus.textContent = recordedBlob
+                ? "Recording captured and ready for transcription."
+                : "Recording did not capture any audio.";
+            updateSourceSummary();
+            stopStream();
+        });
+
+        mediaRecorder.start();
+        recordButton.textContent = "Stop Recording";
+        recordButton.classList.add("button-danger");
+        recordingStatus.innerHTML = '<span class="recording-live">Recording in progress...</span>';
+    } catch (error) {
+        stopStream();
+        recordingStatus.textContent = `Microphone access failed: ${error.message}`;
+    }
+});
 
 form.addEventListener("submit", async (event) => {
     event.preventDefault();
 
-    const fileInput = document.getElementById("audio-file");
-    const languageInput = document.getElementById("language");
+    const selectedAudio = getSelectedAudio();
 
-    if (!fileInput.files.length) {
-        result.textContent = "Please choose an audio file first.";
+    if (!selectedAudio) {
+        result.textContent = "Please choose an audio file or record your voice first.";
         return;
     }
 
     const formData = new FormData();
-    formData.append("file", fileInput.files[0]);
+    formData.append("file", selectedAudio.file);
     formData.append("language", languageInput.value);
     formData.append("response_format", "json");
     formData.append("temperature", "0.0");
 
-    button.disabled = true;
-    button.textContent = "Transcribing...";
+    setBusyState(true);
+    submitButton.textContent = "Transcribing...";
     result.textContent = "Processing audio...";
 
     try {
@@ -204,10 +412,12 @@ form.addEventListener("submit", async (event) => {
     } catch (error) {
         result.textContent = `Error: ${error.message}`;
     } finally {
-        button.disabled = false;
-        button.textContent = "Transcribe";
+        setBusyState(false);
+        submitButton.textContent = "Transcribe";
     }
 });
+
+updateSourceSummary();
 </script>
 </body>
 </html>

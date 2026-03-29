@@ -17,7 +17,7 @@ Incoming audio is normalized before inference:
 
 - multi-channel audio is mixed down to mono
 - input sample rates are resampled to `16 kHz`
-- WAV, MP3, FLAC, OGG and other decodable formats are accepted through `soundfile` with a `librosa` fallback
+- WAV, MP3, FLAC, OGG, WebM and other decodable formats are accepted through `soundfile`, `librosa`, and a final `ffmpeg` fallback
 
 ## Quick Start
 
@@ -58,7 +58,7 @@ docker compose up -d
 
 The provided Compose file:
 
-- binds the API to `127.0.0.1:8080`
+- binds the API to `0.0.0.0:8080`
 - joins the external Docker network `bridge-network`
 - persists Hugging Face cache under `/opt/cohere-transcribe/data`
 
@@ -134,7 +134,7 @@ If loading fails, the endpoint returns `500` and keeps the previous model active
 
 ### `GET /` and `GET /health`
 
-- `GET /` serves the HTML status page, compatibility notes, and a browser upload form backed by `POST /inference`
+- `GET /` serves the HTML status page, compatibility notes, browser upload, and microphone recording backed by `POST /inference`
 - `GET /health` returns JSON liveness and readiness data for load balancers and container health checks
 
 Open the frontend in a browser:
@@ -143,9 +143,11 @@ Open the frontend in a browser:
 http://127.0.0.1:8080/
 ```
 
+The frontend supports both file upload and `Record Voice` microphone capture. In browsers, microphone access usually works on `localhost` or over HTTPS; plain HTTP on a LAN may be blocked by browser security rules.
+
 Frontend preview:
 
-![Frontend preview](docs/frontend-home-v5.png)
+![Frontend preview](docs/frontend-home-v6.png)
 
 ## Compatibility
 

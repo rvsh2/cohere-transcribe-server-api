@@ -7,7 +7,7 @@ services:
     container_name: cohere-transcribe-server-api
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "0.0.0.0:8080:8080"
     networks:
       - bridge-network
     volumes:
@@ -18,7 +18,7 @@ services:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
       - NVIDIA_VISIBLE_DEVICES=all
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      test: [ "CMD", "curl", "-fsS", "http://0.0.0.0:8080/health" ]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -29,8 +29,8 @@ services:
           devices:
             - driver: nvidia
               count: all
-              capabilities: [gpu]
-    command: ["--host", "0.0.0.0", "--port", "8080", "--language", "pl"]
+              capabilities: [ gpu ]
+    command: [ "--host", "0.0.0.0", "--port", "8080", "--language", "pl" ]
 
 networks:
   bridge-network:
