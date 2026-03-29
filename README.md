@@ -145,7 +145,7 @@ http://127.0.0.1:8080/
 
 Frontend preview:
 
-![Frontend preview](docs/frontend-home-v4.png)
+![Frontend preview](docs/frontend-home-v5.png)
 
 ## Compatibility
 

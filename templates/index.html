@@ -12,9 +12,9 @@
         body {
             font-family: 'Inter', -apple-system, system-ui, sans-serif;
             background: linear-gradient(135deg, #0f172a 0%, #172033 52%, #1f2937 100%);
-            color: #e0e0e0; min-height: 100vh; padding: 2rem;
+            color: #e0e0e0; min-height: 100vh; padding: 0.35rem;
         }
-        .container { max-width: 800px; margin: 0 auto; }
+        .container { width: min(1440px, 100%); margin: 0 auto; }
         h1 {
             font-size: 2.5rem; font-weight: 700;
             color: #fffffe;
@@ -86,6 +86,20 @@
             line-height: 1.6;
         }
         .status { color: #2cb67d; font-weight: 600; }
+        @media (max-width: 768px) {
+            body {
+                padding: 0.65rem;
+            }
+            .container {
+                width: 100%;
+            }
+            .card {
+                padding: 1.15rem;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+        }
     </style>
 </head>
 <body>
@@ -99,19 +113,6 @@
         <p>Device: <code>__DEVICE__</code></p>
         <p>Backend: <code>__MODEL_BACKEND__</code></p>
         <p>Status: <span class="status">● Running</span></p>
-    </div>
-
-    <div class="card">
-        <h2>Supported Languages</h2>
-        <div>__SUPPORTED_LANGUAGE_BADGES__</div>
-    </div>
-
-    <div class="card">
-        <h2>API Endpoints</h2>
-        <p><code>POST /inference</code> — whisper.cpp compatible</p>
-        <p><code>POST /v1/audio/transcriptions</code> — OpenAI compatible</p>
-        <p><code>POST /load</code> — hot-reload model</p>
-        <p><code>GET /health</code> — readiness and liveness check</p>
     </div>
 
     <div class="card">
@@ -135,8 +136,21 @@
     </div>
 
     <div class="card">
+        <h2>Supported Languages</h2>
+        <div>__SUPPORTED_LANGUAGE_BADGES__</div>
+    </div>
+
+    <div class="card">
         <h2>Compatibility Notes</h2>
         <ul>__COMPATIBILITY_NOTES__</ul>
+    </div>
+
+    <div class="card">
+        <h2>API Endpoints</h2>
+        <p><code>POST /inference</code> — whisper.cpp compatible</p>
+        <p><code>POST /v1/audio/transcriptions</code> — OpenAI compatible</p>
+        <p><code>POST /load</code> — hot-reload model</p>
+        <p><code>GET /health</code> — readiness and liveness check</p>
     </div>
 
     <div class="card">
