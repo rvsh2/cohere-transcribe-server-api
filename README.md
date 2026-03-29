@@ -289,4 +289,33 @@ curl http://127.0.0.1:8080/health
 
 ## License
 
-Apache 2.0, matching the model packaging used by this project.
+### Model Used
+
+This server is designed around the Cohere ASR model:
+
+- Model: [`CohereLabs/cohere-transcribe-03-2026`](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026)
+- Source: Hugging Face model card and files published by Cohere / Cohere Labs
+- Model license: Apache License 2.0
+
+### Apache 2.0 Notes For The Model
+
+The model card for `CohereLabs/cohere-transcribe-03-2026` states that the model is released under Apache 2.0. If you redistribute the model weights, modified copies of the model, or any package that includes Apache-licensed model artifacts, keep the following in place:
+
+- include a copy of the Apache License 2.0 text
+- preserve existing copyright, attribution, and license notices
+- preserve any `NOTICE` file shipped with the distributed artifacts, if one is provided
+- clearly state that you made changes if you redistribute modified files
+- do not imply trademark rights or endorsement from the license
+
+In practical terms for this repository:
+
+- this project acts as a server wrapper around the model and downloads the weights from Hugging Face at runtime
+- access to the model may still require a Hugging Face account, accepted model terms, and a valid `HF_TOKEN`
+- if you bundle or redistribute the actual model files yourself, you should carry forward the Apache 2.0 license text and any accompanying notices from the upstream distribution
+
+Reference links:
+
+- Model page: <https://huggingface.co/CohereLabs/cohere-transcribe-03-2026>
+- Apache License 2.0 text: <https://www.apache.org/licenses/LICENSE-2.0>
+
+This README section is a practical summary for operators and redistributors, not legal advice.
