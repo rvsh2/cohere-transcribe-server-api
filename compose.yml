@@ -1,10 +1,10 @@
 services:
-  cohere-transcribe:
-    image: cohere-transcribe-server:latest
+  cohere-transcribe-server-api:
+    image: cohere-transcribe-server-api:latest
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: cohere-transcribe-server
+    container_name: cohere-transcribe-server-api
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"

@@ -1,4 +1,4 @@
-# Cohere Transcribe Server
+# cohere-transcribe-server-api
 
 `whisper.cpp`-compatible HTTP API powered by [CohereLabs/cohere-transcribe-03-2026](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026).
 
@@ -36,8 +36,8 @@ python server.py \
 ### Docker / Compose
 
 ```bash
-docker build -t cohere-transcribe-server .
-docker run --gpus all -p 8080:8080 cohere-transcribe-server
+docker build -t cohere-transcribe-server-api .
+docker run --gpus all -p 8080:8080 cohere-transcribe-server-api
 ```
 
 ```bash
